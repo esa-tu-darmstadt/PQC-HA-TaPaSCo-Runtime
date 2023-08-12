@@ -1,0 +1,9 @@
+/target
+*.swp
+*.bak
+PQC*.tapasco
+flamegraph*
+perf.data*
+runtime_report*
+/*.txt
+/*.json

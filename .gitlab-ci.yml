@@ -1,0 +1,150 @@
+# This file is based on the Rust GitLab template.
+
+# Official language image. Look for the different tagged releases at:
+# https://hub.docker.com/r/library/rust/tags/
+image: "rust:latest"  # latest stable release
+#image: $CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:latest
+
+
+# Create directories for Cargo and print versions
+before_script:
+  - mkdir -p target
+  - mkdir -p cargo
+  - du -hs target
+  - du -hs cargo
+  - rustup -V
+  - rustup component add rustfmt
+  - rustup component add clippy
+  - rustc --version && cargo --version            # Print version info for debugging
+
+
+# Use cargo to build and test the project
+
+# stolen from: https://willroe.me/2016/08/16/fast-rust-builds-on-gitlab-ci.html
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/cargo
+  RUST_BACKTRACE: full
+  RUSTFLAGS: -D warnings
+
+
+# Basic pipeline example: https://docs.gitlab.com/ee/ci/pipelines/pipeline_architectures.html
+stages:
+  - build
+  - test
+  - deploy
+
+
+# Global cache for cargo home and target directory for all jobs
+cache:
+  key:
+    files:
+      - Cargo.lock
+  paths:
+    - target/
+    - cargo/
+
+
+# Build stage
+build:
+  stage: build
+  script:
+    - cargo build --verbose --jobs 1 --release  # Don't parallelize to make errors more readable
+
+
+build-nightly:
+  stage: build
+  when: manual  # needs to be triggered manually
+  image: rustlang/rust:nightly
+  script:
+    - cargo build --verbose
+    - cargo test --verbose
+  allow_failure: true
+
+
+# Test stage
+test:
+  stage: test
+  needs: [ build ]
+  script:
+    - cargo test --verbose --jobs 1 --release   # Don't parallelize to make errors more readable
+
+lint:
+  stage: test
+  needs: [ build ]
+  script:
+    - cargo clippy --verbose --jobs 1 --all-features -- -D clippy::all
+
+rustfmt:
+  stage: test
+  needs: [ build ]
+  script:
+    - cargo fmt -- --check
+  allow_failure: true
+
+
+.coverage:
+  stage: test
+  needs: test
+  image: kcov/kcov
+  script:
+    - apt-get update -yqq
+    - apt-get install -yqq --no-install-recommends jq
+    - kcov target/coverage target/release/$CI_PROJECT_NAME
+    - jq '.percent_covered | tonumber' target/coverage/$CI_PROJECT_NAME.*/coverage.json
+  coverage: '/\d+\.\d+/'
+
+
+# Deploy stage
+# Packaging for crates.io does not work because `libtapasco` is a git dependency
+.package:
+  stage: deploy
+  needs: [ test ]
+  script:
+    - cargo publish --verbose --dry-run			# just a dry run to check packaging
+  artifacts:
+    paths:
+      - target/package/
+    expose_as: 'package'
+    name: "$CI_JOB_NAME-$CI_COMMIT_REF_NAME"
+
+
+# Currently defunct due to non-existing login, remove dot when it is ready
+.publish:
+  stage: deploy
+  needs: [ test ]
+  only:
+    refs:
+      - main	# run only on main branch
+  when: manual  # needs to be triggered manually
+  script:
+    - cargo publish --verbose
+  allow_failure: true
+
+
+doc:
+  stage: deploy
+  needs: [ test ]
+  only:
+    refs:
+      - main
+  script:
+    - cargo doc --no-deps
+  artifacts:
+    paths:
+      - target/doc
+    expose_as: 'documentation'
+    name: "$CI_JOB_NAME-$CI_COMMIT_REF_NAME"
+
+
+# Also build image from Dockerfile automatically
+#include:
+#  - local: '.docker.gitlab-ci.yml'
+
+
+# Enable license scanning - nice feature but needs GitLab Ultimate..
+# So sad, it stays here anyway because it could be a community feature in the future
+#include:
+#  - template: License-Scanning.gitlab-ci.yml
+#license_scanning:
+#  variables:
+#    CI_DEBUG_TRACE: "true"
